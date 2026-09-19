@@ -1,16 +1,37 @@
 # YTFreePlus
 
-YTFreePlus is an independent iOS YouTube tweak layer focused on free/open functionality and native Yandex Voice-Over Translation (VOT) integration.
+YTFreePlus is an independent iOS YouTube tweak focused on free/open functionality and native Yandex Voice-Over Translation (VOT) integration.
+
+## Distribution model
+
+YTFreePlus produces **only a tweak package (`.deb`)**.
+
+The intended flow is:
+
+```text
+YTFreePlus source
+      |
+      v
+YTFreePlus.deb
+      |
+      v
+Ksign
+  + clean/decrypted YouTube IPA
+  + YTFreePlus.deb
+  + optional additional tweak .deb files
+      |
+      v
+final signed/injected YouTube IPA
+```
+
+IPA assembly is intentionally outside this repository and belongs to the Ksign workflow.
 
 ## Baseline policy
 
-- Targets the last free YouTube Plus / YTLite release: **5.2b4**.
-- YTLite 5.2b4 is **not vendored** into this repository.
+- The project targets the free/open YTLite lineage, using **YouTube Plus / YTLite 5.2b4** as the last free functional reference.
+- YTLite source/binaries are not bundled into this repository.
 - YTFreePlus does not patch or bypass the paid subscription/account system used by later YouTube Plus releases.
-- Intended packaging: decrypted YouTube IPA + official free YTLite 5.2b4 package + YTFreePlus + optional open-source integrations.
-
-Official free asset: `com.dvntm.ytlite_5.2b4_iphoneos-arm.deb`  
-Published SHA-256: `56130dd4c7a1c9c80acc38c88d12002de3d099ca8de3698f87729331258ed9fa`
+- Features from newer versions are to be reimplemented independently or through compatible open-source components.
 
 ## Current status
 
@@ -18,7 +39,7 @@ Published SHA-256: `56130dd4c7a1c9c80acc38c88d12002de3d099ca8de3698f87729331258e
 
 The tweak builds successfully with GitHub Actions.
 
-Implemented in source:
+Implemented:
 - Theos tweak scaffold
 - current YouTube player/overlay compatibility declarations
 - native Yandex VOT protocol layer
@@ -30,7 +51,6 @@ Implemented in source:
 - media-time/playback-rate synchronization foundation
 - temporary VOT player button
 - automatic `.deb` CI artifact
-- manual IPA packaging workflow using free YTLite 5.2b4
 
 Still to verify on a physical iPhone:
 - runtime compatibility with the selected YouTube IPA version
@@ -41,7 +61,7 @@ Still to verify on a physical iPhone:
 
 See `docs/ARCHITECTURE.md` and `docs/ROADMAP.md`.
 
-## Build tweak
+## Build the tweak
 
 Requires Theos and an iOS SDK.
 
@@ -49,25 +69,20 @@ Requires Theos and an iOS SDK.
 make clean package
 ```
 
-The normal **Build YTFreePlus** GitHub Action produces a `YTFreePlus-deb` artifact.
+The **Build YTFreePlus** GitHub Action produces a `YTFreePlus-deb` artifact containing the compiled tweak package.
 
-## Build an IPA
+Tagged versions can publish the resulting `.deb` as a GitHub Release asset.
 
-Open **Actions → Build YTFreePlus IPA → Run workflow** and provide:
+## Ksign integration
 
-1. a direct URL to your decrypted YouTube IPA;
-2. the desired display name;
-3. the desired bundle ID.
+Ksign should treat YTFreePlus as a normal tweak package:
 
-The workflow:
-- builds YTFreePlus from the current commit;
-- downloads the official free YTLite 5.2b4 package;
-- verifies its published SHA-256;
-- validates the supplied IPA structure;
-- injects YTLite 5.2b4 and YTFreePlus;
-- uploads `YTFreePlus.ipa` as a private GitHub Actions artifact.
+1. select a clean/decrypted YouTube IPA;
+2. add the compiled `YTFreePlus.deb`;
+3. optionally add other compatible tweak `.deb` packages;
+4. inject/sign/package the resulting IPA inside Ksign.
 
-No decrypted YouTube IPA is stored in this repository.
+YTFreePlus itself does not download, modify, store, or redistribute YouTube IPA files.
 
 ## License
 
