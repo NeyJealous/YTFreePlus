@@ -1,0 +1,119 @@
+name: Temporary YTPlus 5.2.2 binary audit
+
+on:
+  push:
+    paths:
+      - ".github/workflows/_tmp_audit_ytplus522.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: macos-latest
+    steps:
+      - name: Install dpkg
+        run: brew install dpkg
+
+      - name: Download comparison binaries
+        run: |
+          curl -fL --retry 3 "https://github.com/Mark02-2012/MaxTube/releases/download/YTPlusVersions/com.dvntm.ytlite_5.2.2_iphoneos-arm.deb" -o cracked.deb
+          curl -fL --retry 3 "https://github.com/Mark02-2012/MaxTube/releases/download/YTPlusVersions/com.dvntm.ytlite_5.2b4_iphoneos-arm.deb" -o free.deb
+          curl -fL --retry 3 "https://github.com/Mark02-2012/MaxTube/releases/download/YTPlusVersions/YTLite-5.2.2-Cracked-Zarzel.dylib" -o standalone-cracked.dylib
+
+      - name: Extract and analyze
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p report free-root cracked-root
+          shasum -a 256 cracked.deb free.deb standalone-cracked.dylib > report/hashes.txt
+          {
+            echo "===== CRACKED 5.2.2 CONTROL ====="
+            dpkg-deb -I cracked.deb
+            echo
+            echo "===== FREE 5.2b4 CONTROL ====="
+            dpkg-deb -I free.deb
+          } > report/control.txt 2>&1
+          dpkg-deb -c cracked.deb > report/cracked-tree.txt
+          dpkg-deb -c free.deb > report/free-tree.txt
+          dpkg-deb -x cracked.deb cracked-root
+          dpkg-deb -x free.deb free-root
+
+          find cracked-root -type f -print | sed 's#^cracked-root/##' | sort > report/cracked-files.txt
+          find free-root -type f -print | sed 's#^free-root/##' | sort > report/free-files.txt
+          diff -u report/free-files.txt report/cracked-files.txt > report/filetree-diff.txt || true
+
+          CRACKED_DYLIB="$(find cracked-root -type f -name '*.dylib' | head -n 1)"
+          FREE_DYLIB="$(find free-root -type f -name '*.dylib' | head -n 1)"
+          printf "CRACKED_DYLIB=%s\nFREE_DYLIB=%s\n" "$CRACKED_DYLIB" "$FREE_DYLIB" > report/paths.txt
+
+          {
+            echo "===== file ====="
+            file "$CRACKED_DYLIB" "$FREE_DYLIB" standalone-cracked.dylib
+            echo
+            echo "===== sizes ====="
+            stat -f '%N %z bytes' "$CRACKED_DYLIB" "$FREE_DYLIB" standalone-cracked.dylib
+            echo
+            echo "===== dylib hashes ====="
+            shasum -a 256 "$CRACKED_DYLIB" "$FREE_DYLIB" standalone-cracked.dylib
+            echo
+            echo "===== cmp extracted cracked vs standalone ====="
+            if cmp -s "$CRACKED_DYLIB" standalone-cracked.dylib; then echo "IDENTICAL"; else echo "DIFFERENT"; fi
+          } > report/binary-summary.txt
+
+          {
+            echo "===== CRACKED LOAD COMMANDS / LINKED LIBS ====="
+            otool -L "$CRACKED_DYLIB"
+            echo
+            echo "===== FREE LOAD COMMANDS / LINKED LIBS ====="
+            otool -L "$FREE_DYLIB"
+          } > report/linked-libs.txt 2>&1
+
+          {
+            echo "===== CRACKED MACH HEADER ====="
+            otool -hv "$CRACKED_DYLIB"
+            echo
+            echo "===== FREE MACH HEADER ====="
+            otool -hv "$FREE_DYLIB"
+          } > report/mach-header.txt 2>&1
+
+          nm -m "$CRACKED_DYLIB" 2>/dev/null | grep -E 'OBJC_(CLASS|METACLASS)_\$_' | sed -E 's/.*OBJC_(META)?CLASS_\$_//' | sort -u > report/cracked-objc-classes.txt || true
+          nm -m "$FREE_DYLIB" 2>/dev/null | grep -E 'OBJC_(CLASS|METACLASS)_\$_' | sed -E 's/.*OBJC_(META)?CLASS_\$_//' | sort -u > report/free-objc-classes.txt || true
+          diff -u report/free-objc-classes.txt report/cracked-objc-classes.txt > report/objc-class-diff.txt || true
+
+          strings -a -n 6 "$CRACKED_DYLIB" | sort -u > report/cracked-strings.txt
+          strings -a -n 6 "$FREE_DYLIB" | sort -u > report/free-strings.txt
+          comm -13 report/free-strings.txt report/cracked-strings.txt > report/new-strings-522.txt || true
+
+          grep -Ei 'sponsor|download|audio track|thumbnail|sleep|timer|speed|discord|translate|translation|comment|post|cache|quality|shorts|gesture|account|subscription|license|patreon|premium|settings|chapter|share|copy|oled|feed|tab|subtitle|caption' report/new-strings-522.txt             | head -n 2000 > report/feature-strings.txt || true
+
+          {
+            echo "cracked class count: $(wc -l < report/cracked-objc-classes.txt)"
+            echo "free class count: $(wc -l < report/free-objc-classes.txt)"
+            echo "new strings count: $(wc -l < report/new-strings-522.txt)"
+            echo "cracked package files: $(wc -l < report/cracked-files.txt)"
+            echo "free package files: $(wc -l < report/free-files.txt)"
+          } > report/counts.txt
+
+          # Resource-level hashes for same-path files, useful for spotting changed bundles.
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          a=Path("free-root"); b=Path("cracked-root")
+          rows=[]
+          for p in sorted(set(x.relative_to(a) for x in a.rglob("*") if x.is_file()) & set(x.relative_to(b) for x in b.rglob("*") if x.is_file())):
+              aa=a/p; bb=b/p
+              ha=hashlib.sha256(aa.read_bytes()).hexdigest()
+              hb=hashlib.sha256(bb.read_bytes()).hexdigest()
+              if ha!=hb:
+                  rows.append(f"{p}\t{aa.stat().st_size}\t{bb.stat().st_size}\t{ha}\t{hb}")
+          Path("report/changed-same-path-files.tsv").write_text("\n".join(rows))
+          PY
+
+      - name: Upload text audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytplus522-text-audit
+          path: report/
+          if-no-files-found: error
+          retention-days: 1
