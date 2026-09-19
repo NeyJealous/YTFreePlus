@@ -6,6 +6,9 @@ PACKAGE_VERSION = 0.1.0
 
 include $(THEOS)/makefiles/common.mk
 
+before-all::
+	@python3 scripts/sync_vot_config.py
+
 TWEAK_NAME = YTFreePlus
 YTFreePlus_FILES = YTFreePlus.x \
 	VOT/VOTConfig.m \
