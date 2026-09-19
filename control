@@ -1,0 +1,9 @@
+Package: com.neyjealous.ytfreeplus
+Name: YTFreePlus
+Depends: mobilesubstrate
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: Independent YouTube enhancement layer with native Yandex VOT integration
+Maintainer: YTFreePlus contributors
+Author: YTFreePlus contributors
+Section: Tweaks
