@@ -16,35 +16,6 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
     }
 }
 
-%hook YTPlayerViewController
-
-- (void)loadWithPlayerTransition:(id)transition playbackConfig:(id)config {
-    %orig;
-    [VOTManager shared].playerController = self;
-}
-
-- (void)play {
-    %orig;
-    [[VOTManager shared] playerDidPlay];
-}
-
-- (void)pause {
-    %orig;
-    [[VOTManager shared] playerDidPause];
-}
-
-- (void)singleVideo:(YTSingleVideoController *)video currentVideoTimeDidChange:(YTSingleVideoTime *)time {
-    %orig;
-    [[VOTManager shared] updateTime:time.time rate:video.playbackRate];
-}
-
-- (void)potentiallyMutatedSingleVideo:(YTSingleVideoController *)video currentVideoTimeDidChange:(YTSingleVideoTime *)time {
-    %orig;
-    [[VOTManager shared] updateTime:time.time rate:video.playbackRate];
-}
-
-%end
-
 %hook YTMainAppControlsOverlayView
 
 %property(nonatomic, strong) UIButton *ytfpVOTButton;
@@ -89,9 +60,11 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
 %new
 - (void)ytfpToggleVOT {
     YTPlayerViewController *player = self.playerViewController;
-    NSString *videoID = player.contentVideoID;
-    NSTimeInterval duration = player.activeVideo.totalMediaTime;
+    NSString *videoID = [player contentVideoID];
+    NSTimeInterval duration = [player currentVideoTotalMediaTime];
     if (videoID.length == 0 || duration <= 0) return;
+
+    [VOTManager shared].playerController = player;
     [[VOTManager shared] toggleForVideoID:videoID duration:duration];
 }
 
