@@ -13,4 +13,9 @@
 
 @interface YTMainAppControlsOverlayView : UIView
 @property(nonatomic, strong, readwrite) YTPlayerViewController *playerViewController;
+@property(nonatomic, strong) UIButton *ytfpVOTButton;
+@property(nonatomic, assign) BOOL ytfpVOTObserving;
+- (void)ytfpToggleVOT;
+- (void)ytfpVOTStateChanged:(NSNotification *)notification;
+- (void)ytfpRefreshVOTButton:(NSNotification *)notification;
 @end
