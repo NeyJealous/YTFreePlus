@@ -21,6 +21,6 @@ YTFreePlus_FILES = YTFreePlus.x \
 	VOT/VOTManager.m
 YTFreePlus_FRAMEWORKS = UIKit Foundation AVFoundation
 YTFreePlus_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-YTFreePlus_LIBRARIES = substrate commonCrypto
+YTFreePlus_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
