@@ -3,15 +3,19 @@
 #import "VOTAudioPlayer.h"
 #import "VOTConfig.h"
 #import "VOTTranslation.h"
+#import "../YTFreePlus.h"
 
 @interface VOTManager ()
 @property(nonatomic, strong) VOTClient *client;
 @property(nonatomic, strong) VOTAudioPlayer *audioPlayer;
 @property(nonatomic, assign, readwrite) VOTManagerState state;
 @property(nonatomic, copy, nullable) NSString *videoID;
+@property(nonatomic, strong, nullable) NSTimer *syncTimer;
 @property(nonatomic, assign) NSTimeInterval latestTime;
+@property(nonatomic, assign) NSTimeInterval lastObservedTime;
 @property(nonatomic, assign) float latestRate;
 @property(nonatomic, assign) BOOL youtubePlaying;
+@property(nonatomic, assign) NSUInteger stillTicks;
 @end
 
 @implementation VOTManager
@@ -44,6 +48,47 @@
     [[NSNotificationCenter defaultCenter] postNotificationName:VOTStateChangedNotification object:self userInfo:info];
 }
 
+- (void)startSyncTimer {
+    [self.syncTimer invalidate];
+    self.lastObservedTime = -1;
+    self.stillTicks = 0;
+
+    __weak typeof(self) weakSelf = self;
+    self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:0.4 repeats:YES block:^(NSTimer *timer) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+
+        YTPlayerViewController *player = self.playerController;
+        if (!player) return;
+
+        NSTimeInterval current = [player currentVideoMediaTime];
+        float rate = 1.0f;
+        id overlay = [player activeVideoPlayerOverlay];
+        if ([overlay respondsToSelector:@selector(currentPlaybackRate)]) {
+            rate = [(YTMainAppVideoPlayerOverlayViewController *)overlay currentPlaybackRate];
+            if (rate <= 0.01f) rate = 1.0f;
+        }
+
+        if (self.lastObservedTime >= 0 && fabs(current - self.lastObservedTime) > 0.03) {
+            self.youtubePlaying = YES;
+            self.stillTicks = 0;
+        } else {
+            self.stillTicks += 1;
+            if (self.stillTicks >= 2) self.youtubePlaying = NO;
+        }
+
+        self.latestTime = current;
+        self.latestRate = rate;
+        self.lastObservedTime = current;
+
+        if (self.state == VOTManagerStateActive) {
+            [self.audioPlayer syncToTime:current rate:rate];
+            if (self.youtubePlaying) [self.audioPlayer play];
+            else [self.audioPlayer pause];
+        }
+    }];
+}
+
 - (void)toggleForVideoID:(NSString *)videoID duration:(NSTimeInterval)duration {
     if (self.state != VOTManagerStateOff && [self.videoID isEqualToString:videoID]) {
         [self stop];
@@ -52,6 +97,7 @@
 
     [self stop];
     self.videoID = videoID;
+    [self startSyncTimer];
     [self setStateAndNotify:VOTManagerStatePending extra:nil];
 
     NSString *url = [NSString stringWithFormat:@"https://youtu.be/%@", videoID];
@@ -65,16 +111,14 @@
                          progress:^(VOTTranslation *translation) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self || ![self.videoID isEqualToString:videoID]) return;
-        [self setStateAndNotify:VOTManagerStatePending
-                          extra:@{@"remainingTime": @(translation.remainingTime)}];
+        [self setStateAndNotify:VOTManagerStatePending extra:@{@"remainingTime": @(translation.remainingTime)}];
     }
                        completion:^(VOTTranslation *translation, NSError *error) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self || ![self.videoID isEqualToString:videoID]) return;
 
         if (error || translation.audioURL.length == 0) {
-            [self setStateAndNotify:VOTManagerStateError
-                              extra:@{@"message": error.localizedDescription ?: @"VOT error"}];
+            [self setStateAndNotify:VOTManagerStateError extra:@{@"message": error.localizedDescription ?: @"VOT error"}];
             return;
         }
 
@@ -86,8 +130,7 @@
 
         [self.audioPlayer loadURL:audioURL completion:^(NSError *audioError) {
             if (audioError) {
-                [self setStateAndNotify:VOTManagerStateError
-                                  extra:@{@"message": audioError.localizedDescription ?: @"Audio error"}];
+                [self setStateAndNotify:VOTManagerStateError extra:@{@"message": audioError.localizedDescription ?: @"Audio error"}];
                 return;
             }
 
@@ -98,28 +141,13 @@
     }];
 }
 
-- (void)playerDidPlay {
-    self.youtubePlaying = YES;
-    if (self.state == VOTManagerStateActive) [self.audioPlayer play];
-}
-
-- (void)playerDidPause {
-    self.youtubePlaying = NO;
-    [self.audioPlayer pause];
-}
-
-- (void)updateTime:(NSTimeInterval)time rate:(float)rate {
-    self.latestTime = time;
-    self.latestRate = rate > 0.01f ? rate : 1.0f;
-    if (self.state == VOTManagerStateActive) {
-        [self.audioPlayer syncToTime:time rate:self.latestRate];
-    }
-}
-
 - (void)stop {
+    [self.syncTimer invalidate];
+    self.syncTimer = nil;
     [self.client cancel];
     [self.audioPlayer stop];
     self.videoID = nil;
+    self.youtubePlaying = NO;
     [self setStateAndNotify:VOTManagerStateOff extra:nil];
 }
 
