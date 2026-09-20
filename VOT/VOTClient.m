@@ -334,18 +334,325 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
     }];
 }
 
-- (void)handleAudioRequestedForURL:(NSString *)url
-                           videoID:(NSString *)videoID
-                     translationID:(NSString *)translationID
-                         operation:(NSUInteger)operation
-                        completion:(void (^)(NSError * _Nullable))completion {
-    if (translationID.length == 0) {
-        completion([NSError errorWithDomain:VOTErrorDomain
-                                        code:-4
-                                    userInfo:@{NSLocalizedDescriptionKey: @"Missing VOT translation ID"}]);
+- (NSURL *)audioURLBySettingRangeFromURL:(NSURL *)baseURL
+                                     start:(long long)start
+                                       end:(long long)end
+                             requestNumber:(NSUInteger)requestNumber {
+    if (!baseURL) return nil;
+
+    NSURLComponents *components = [NSURLComponents componentsWithURL:baseURL resolvingAgainstBaseURL:NO];
+    if (!components) return nil;
+
+    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
+    for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+        NSString *name = item.name.lowercaseString;
+        if ([name isEqualToString:@"range"] ||
+            [name isEqualToString:@"rn"] ||
+            [name isEqualToString:@"ump"]) {
+            continue;
+        }
+        [items addObject:item];
+    }
+
+    [items addObject:[NSURLQueryItem queryItemWithName:@"range"
+                                                 value:[NSString stringWithFormat:@"%lld-%lld", start, end]]];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"rn"
+                                                 value:[NSString stringWithFormat:@"%lu", (unsigned long)requestNumber]]];
+    components.queryItems = items;
+    return components.URL;
+}
+
+- (long long)audioContentLengthFromURL:(NSURL *)URL {
+    if (!URL) return 0;
+    NSURLComponents *components = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
+    for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+        if ([item.name.lowercaseString isEqualToString:@"clen"]) {
+            long long value = item.value.longLongValue;
+            if (value > 0) return value;
+        }
+    }
+    return 0;
+}
+
+- (long long)audioContentLengthFromResponse:(NSHTTPURLResponse *)response {
+    if (!response) return 0;
+
+    NSString *contentRange = nil;
+    for (id key in response.allHeaderFields) {
+        if ([[key description] caseInsensitiveCompare:@"Content-Range"] == NSOrderedSame) {
+            contentRange = [response.allHeaderFields[key] description];
+            break;
+        }
+    }
+
+    NSRange slash = [contentRange rangeOfString:@"/" options:NSBackwardsSearch];
+    if (slash.location != NSNotFound && slash.location + 1 < contentRange.length) {
+        NSString *total = [contentRange substringFromIndex:slash.location + 1];
+        long long value = total.longLongValue;
+        if (value > 0) return value;
+    }
+    return 0;
+}
+
+- (void)probeAudioContentLengthForURL:(NSURL *)audioStreamURL
+                            operation:(NSUInteger)operation
+                           completion:(void (^)(long long contentLength, NSError * _Nullable error))completion {
+    long long embeddedLength = [self audioContentLengthFromURL:audioStreamURL];
+    if (embeddedLength > 0) {
+        completion(embeddedLength, nil);
         return;
     }
 
+    NSURL *probeURL = [self audioURLBySettingRangeFromURL:audioStreamURL
+                                                    start:0
+                                                      end:0
+                                            requestNumber:1];
+    if (!probeURL) {
+        completion(0, [NSError errorWithDomain:VOTErrorDomain
+                                          code:-20
+                                      userInfo:@{NSLocalizedDescriptionKey: @"YouTube audio URL is invalid"}]);
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:probeURL];
+    request.HTTPMethod = @"GET";
+    request.timeoutInterval = 45;
+
+    __weak typeof(self) weakSelf = self;
+    [self performRequest:request completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self || operation != self.operationID) return;
+
+        if (error) {
+            completion(0, error);
+            return;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            completion(0, [self httpErrorWithResponse:response description:@"YouTube audio probe failed"]);
+            return;
+        }
+
+        long long contentLength = [self audioContentLengthFromResponse:response];
+        if (contentLength <= 0) {
+            completion(0, [NSError errorWithDomain:VOTErrorDomain
+                                              code:-21
+                                          userInfo:@{NSLocalizedDescriptionKey:
+                                              @"Could not determine YouTube audio size"}]);
+            return;
+        }
+
+        completion(contentLength, nil);
+    }];
+}
+
+- (void)downloadAudioChunkFromURL:(NSURL *)audioStreamURL
+                            start:(long long)start
+                              end:(long long)end
+                    requestNumber:(NSUInteger)requestNumber
+                        operation:(NSUInteger)operation
+                       completion:(void (^)(NSData * _Nullable data, NSError * _Nullable error))completion {
+    NSURL *rangeURL = [self audioURLBySettingRangeFromURL:audioStreamURL
+                                                    start:start
+                                                      end:end
+                                            requestNumber:requestNumber];
+    if (!rangeURL) {
+        completion(nil, [NSError errorWithDomain:VOTErrorDomain
+                                            code:-22
+                                        userInfo:@{NSLocalizedDescriptionKey: @"Could not build YouTube audio range URL"}]);
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:rangeURL];
+    request.HTTPMethod = @"GET";
+    request.timeoutInterval = 120;
+
+    __weak typeof(self) weakSelf = self;
+    [self performRequest:request completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self || operation != self.operationID) return;
+
+        if (error) {
+            completion(nil, error);
+            return;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            completion(nil, [self httpErrorWithResponse:response description:@"YouTube audio range request failed"]);
+            return;
+        }
+
+        NSUInteger expectedLength = (NSUInteger)(end - start + 1);
+        if (data.length != expectedLength) {
+            completion(nil, [NSError errorWithDomain:VOTErrorDomain
+                                                code:-23
+                                            userInfo:@{NSLocalizedDescriptionKey:
+                                                [NSString stringWithFormat:@"Incomplete YouTube audio chunk (%lu/%lu bytes)",
+                                                 (unsigned long)data.length,
+                                                 (unsigned long)expectedLength]}]);
+            return;
+        }
+
+        completion(data, nil);
+    }];
+}
+
+- (void)uploadAudioChunk:(NSData *)audioData
+                     url:(NSString *)url
+           translationID:(NSString *)translationID
+                  fileID:(NSString *)fileID
+                 chunkID:(NSInteger)chunkID
+            partsLength:(NSInteger)partsLength
+               operation:(NSUInteger)operation
+              completion:(void (^)(NSError * _Nullable error))completion {
+    NSData *body = [VOTProto partialAudioRequestWithURL:url
+                                          translationID:translationID
+                                                 fileID:fileID
+                                                chunkID:chunkID
+                                           partsLength:partsLength
+                                                  data:audioData];
+    NSString *path = @"/video-translation/audio";
+    NSMutableURLRequest *request = [self requestForPath:path
+                                                method:@"PUT"
+                                                  body:body
+                                                  json:NO];
+    [self applyHeaders:[self sessionHeadersForBody:body path:path] toRequest:request];
+
+    __weak typeof(self) weakSelf = self;
+    [self performRequest:request completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self || operation != self.operationID) return;
+
+        if (error) {
+            completion(error);
+            return;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            completion([self httpErrorWithResponse:response description:@"VOT audio chunk upload failed"]);
+            return;
+        }
+        completion(nil);
+    }];
+}
+
+- (void)downloadAndUploadAudioForURL:(NSString *)url
+                       audioStreamURL:(NSURL *)audioStreamURL
+                       translationID:(NSString *)translationID
+                              fileID:(NSString *)fileID
+                       contentLength:(long long)contentLength
+                               index:(NSInteger)index
+                          totalParts:(NSInteger)totalParts
+                           operation:(NSUInteger)operation
+                          completion:(void (^)(NSError * _Nullable error))completion {
+    if (operation != self.operationID) return;
+    if (index >= totalParts) {
+        completion(nil);
+        return;
+    }
+
+    long long start = (long long)index * (long long)VOTAudioChunkSize;
+    long long end = MIN(contentLength - 1, start + (long long)VOTAudioChunkSize - 1);
+
+    __weak typeof(self) weakSelf = self;
+    [self downloadAudioChunkFromURL:audioStreamURL
+                              start:start
+                                end:end
+                      requestNumber:(NSUInteger)index + 1
+                          operation:operation
+                         completion:^(NSData *data, NSError *downloadError) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self || operation != self.operationID) return;
+
+        if (downloadError || data.length == 0) {
+            completion(downloadError ?: [NSError errorWithDomain:VOTErrorDomain
+                                                            code:-24
+                                                        userInfo:@{NSLocalizedDescriptionKey: @"YouTube audio chunk is empty"}]);
+            return;
+        }
+
+        BOOL isLast = index == totalParts - 1;
+        NSInteger announcedParts = isLast ? totalParts : 0;
+        [self uploadAudioChunk:data
+                           url:url
+                 translationID:translationID
+                        fileID:fileID
+                       chunkID:index
+                  partsLength:announcedParts
+                     operation:operation
+                    completion:^(NSError *uploadError) {
+            if (operation != self.operationID) return;
+            if (uploadError) {
+                completion(uploadError);
+                return;
+            }
+
+            [self downloadAndUploadAudioForURL:url
+                                audioStreamURL:audioStreamURL
+                                translationID:translationID
+                                       fileID:fileID
+                                contentLength:contentLength
+                                        index:index + 1
+                                   totalParts:totalParts
+                                    operation:operation
+                                   completion:completion];
+        }];
+    }];
+}
+
+- (void)uploadNativeAudioForURL:(NSString *)url
+                        videoID:(NSString *)videoID
+                  translationID:(NSString *)translationID
+                 audioStreamURL:(NSURL *)audioStreamURL
+                      operation:(NSUInteger)operation
+                     completion:(void (^)(NSError * _Nullable error))completion {
+    if (!audioStreamURL) {
+        completion([NSError errorWithDomain:VOTErrorDomain
+                                       code:-25
+                                   userInfo:@{NSLocalizedDescriptionKey: @"YouTube audio stream is unavailable"}]);
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [self probeAudioContentLengthForURL:audioStreamURL
+                              operation:operation
+                             completion:^(long long contentLength, NSError *probeError) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self || operation != self.operationID) return;
+
+        if (probeError || contentLength <= 0) {
+            completion(probeError ?: [NSError errorWithDomain:VOTErrorDomain
+                                                         code:-26
+                                                     userInfo:@{NSLocalizedDescriptionKey: @"YouTube audio size is unavailable"}]);
+            return;
+        }
+
+        NSInteger totalParts = (NSInteger)((contentLength + (long long)VOTAudioChunkSize - 1) /
+                                           (long long)VOTAudioChunkSize);
+        if (totalParts <= 0) {
+            completion([NSError errorWithDomain:VOTErrorDomain
+                                           code:-27
+                                       userInfo:@{NSLocalizedDescriptionKey: @"Invalid YouTube audio chunk count"}]);
+            return;
+        }
+
+        NSString *fileID = [NSString stringWithFormat:@"random-web_abr-%@",
+                            NSUUID.UUID.UUIDString.lowercaseString];
+
+        [self downloadAndUploadAudioForURL:url
+                            audioStreamURL:audioStreamURL
+                            translationID:translationID
+                                   fileID:fileID
+                            contentLength:contentLength
+                                    index:0
+                               totalParts:totalParts
+                                operation:operation
+                               completion:completion];
+    }];
+}
+
+- (void)handleEmptyAudioFallbackForURL:(NSString *)url
+                               videoID:(NSString *)videoID
+                         translationID:(NSString *)translationID
+                             operation:(NSUInteger)operation
+                            completion:(void (^)(NSError * _Nullable))completion {
     NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"video_url": url}
                                                    options:0
                                                      error:nil];
@@ -358,9 +665,21 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
     [self performRequest:failRequest completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self || operation != self.operationID) return;
+
         if (error || response.statusCode < 200 || response.statusCode >= 300) {
             completion(error ?: [self httpErrorWithResponse:response description:@"VOT fail-audio request failed"]);
             return;
+        }
+
+        if (data.length > 0) {
+            NSDictionary *jsonResponse = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSNumber *status = [jsonResponse isKindOfClass:NSDictionary.class] ? jsonResponse[@"status"] : nil;
+            if (status && status.integerValue != 1) {
+                completion([NSError errorWithDomain:VOTErrorDomain
+                                               code:-28
+                                           userInfo:@{NSLocalizedDescriptionKey: @"Yandex rejected fail-audio fallback"}]);
+                return;
+            }
         }
 
         NSString *fileID = [NSString stringWithFormat:@"fallback-empty-audio:video-translation:%@", videoID];
@@ -383,6 +702,43 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
             }
             completion(nil);
         }];
+    }];
+}
+
+- (void)handleAudioRequestedForURL:(NSString *)url
+                           videoID:(NSString *)videoID
+                     translationID:(NSString *)translationID
+                    audioStreamURL:(NSURL *)audioStreamURL
+                         operation:(NSUInteger)operation
+                        completion:(void (^)(NSError * _Nullable))completion {
+    if (translationID.length == 0) {
+        completion([NSError errorWithDomain:VOTErrorDomain
+                                        code:-4
+                                    userInfo:@{NSLocalizedDescriptionKey: @"Missing VOT translation ID"}]);
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [self uploadNativeAudioForURL:url
+                          videoID:videoID
+                    translationID:translationID
+                   audioStreamURL:audioStreamURL
+                        operation:operation
+                       completion:^(NSError *nativeError) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self || operation != self.operationID) return;
+
+        if (!nativeError) {
+            completion(nil);
+            return;
+        }
+
+        NSLog(@"[YTFreePlus][VOT] Native audio upload failed: %@", nativeError.localizedDescription);
+        [self handleEmptyAudioFallbackForURL:url
+                                     videoID:videoID
+                               translationID:translationID
+                                   operation:operation
+                                  completion:completion];
     }];
 }
 
