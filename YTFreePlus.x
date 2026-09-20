@@ -2,6 +2,8 @@
 #import "VOT/VOTManager.h"
 #import "VOT/VOTConfig.h"
 
+static __weak YTPlayerViewController *YTFPActivePlayerController = nil;
+
 static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaining) {
     switch (state) {
         case VOTManagerStatePending:
@@ -45,6 +47,75 @@ static UIViewController *YTFPTopViewController(void) {
     return controller;
 }
 
+static UIWindow *YTFPKeyWindow(void) {
+    for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
+        if (candidate.isKeyWindow) return candidate;
+    }
+    return UIApplication.sharedApplication.windows.firstObject;
+}
+
+static YTPlayerViewController *YTFPFindPlayerInResponderChain(UIResponder *responder) {
+    Class playerClass = NSClassFromString(@"YTPlayerViewController");
+    if (!playerClass) return nil;
+
+    UIResponder *current = responder;
+    NSUInteger depth = 0;
+    while (current && depth++ < 100) {
+        if ([current isKindOfClass:playerClass]) {
+            return (YTPlayerViewController *)current;
+        }
+        current = current.nextResponder;
+    }
+    return nil;
+}
+
+static YTPlayerViewController *YTFPFindPlayerInController(UIViewController *controller) {
+    if (!controller) return nil;
+
+    Class playerClass = NSClassFromString(@"YTPlayerViewController");
+    if (playerClass && [controller isKindOfClass:playerClass]) {
+        return (YTPlayerViewController *)controller;
+    }
+
+    if (controller.presentedViewController) {
+        YTPlayerViewController *found = YTFPFindPlayerInController(controller.presentedViewController);
+        if (found) return found;
+    }
+
+    if ([controller isKindOfClass:UINavigationController.class]) {
+        UINavigationController *navigation = (UINavigationController *)controller;
+        YTPlayerViewController *found = YTFPFindPlayerInController(navigation.visibleViewController);
+        if (found) return found;
+    }
+
+    if ([controller isKindOfClass:UITabBarController.class]) {
+        UITabBarController *tabs = (UITabBarController *)controller;
+        YTPlayerViewController *found = YTFPFindPlayerInController(tabs.selectedViewController);
+        if (found) return found;
+    }
+
+    for (UIViewController *child in [controller.childViewControllers reverseObjectEnumerator]) {
+        YTPlayerViewController *found = YTFPFindPlayerInController(child);
+        if (found) return found;
+    }
+
+    return nil;
+}
+
+static YTPlayerViewController *YTFPResolvePlayerController(UIResponder *origin) {
+    YTPlayerViewController *player = YTFPFindPlayerInResponderChain(origin);
+    if (player) return player;
+
+    UIWindow *window = YTFPKeyWindow();
+    player = YTFPFindPlayerInController(window.rootViewController);
+    if (player) return player;
+
+    player = YTFPActivePlayerController;
+    if (player) return player;
+
+    return nil;
+}
+
 static void YTFPShowVOTError(NSString *message) {
     if (message.length == 0) return;
 
@@ -62,6 +133,21 @@ static void YTFPShowVOTError(NSString *message) {
         [controller presentViewController:alert animated:YES completion:nil];
     });
 }
+
+
+%hook YTPlayerViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    YTFPActivePlayerController = self;
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    YTFPActivePlayerController = self;
+}
+
+%end
 
 %hook YTMainAppControlsOverlayView
 
@@ -106,21 +192,16 @@ static void YTFPShowVOTError(NSString *message) {
 
 %new
 - (void)ytfpToggleVOT {
-    id player = nil;
-
-    @try {
-        if ([self respondsToSelector:@selector(playerViewController)]) {
-            player = self.playerViewController;
-        }
-    } @catch (__unused NSException *exception) {
-        player = nil;
-    }
+    id player = YTFPResolvePlayerController(self);
 
     if (!player ||
         ![player respondsToSelector:@selector(contentVideoID)] ||
         ![player respondsToSelector:@selector(currentVideoTotalMediaTime)]) {
         [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
-        YTFPShowVOTError(@"YouTube player API is unavailable.");
+        NSString *detail = player
+            ? [NSString stringWithFormat:@"Found %@, but required player methods are unavailable.", NSStringFromClass([player class])]
+            : @"YTPlayerViewController was not found in the active view hierarchy.";
+        YTFPShowVOTError(detail);
         return;
     }
 
