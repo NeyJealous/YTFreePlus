@@ -157,11 +157,15 @@ static void YTFPRefreshOverlayButton(id host, NSNotification *notification) {
     NSString *title = VOTButtonTitleForState([VOTManager shared].state, remaining);
     [button setTitle:title forState:UIControlStateNormal];
 
-    BOOL visible = VOTPreferencesEnabled() && VOTPreferencesShowButton();
-    button.hidden = !visible;
-    if (visible && button.alpha <= 0.0 && [host window]) {
-        button.alpha = 1.0;
-    }
+    BOOL enabled = VOTPreferencesEnabled() && VOTPreferencesShowButton();
+    NSInteger position = [[NSUserDefaults standardUserDefaults]
+        integerForKey:@"YTVideoOverlay-YTFreePlusVOT-Position"];
+    BOOL isBottomHost = [host isKindOfClass:NSClassFromString(@"YTInlinePlayerBarContainerView")];
+    BOOL belongsToThisHost = isBottomHost ? (position == 1) : (position == 0);
+
+    // YTVideoOverlay owns alpha/layout. We only prevent the non-selected host
+    // from becoming visible, otherwise top + bottom copies can appear together.
+    button.hidden = !(enabled && belongsToThisHost);
 
     if ([host respondsToSelector:@selector(setNeedsLayout)]) {
         [host setNeedsLayout];
