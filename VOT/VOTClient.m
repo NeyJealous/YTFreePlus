@@ -75,9 +75,15 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
 }
 
 - (NSError *)httpErrorWithResponse:(NSHTTPURLResponse *)response description:(NSString *)description {
+    NSInteger status = response ? response.statusCode : 0;
+    NSString *contentType = response.allHeaderFields[@"Content-Type"];
+    NSString *message = [NSString stringWithFormat:@"%@ (HTTP %ld%@)",
+                         description,
+                         (long)status,
+                         contentType.length ? [NSString stringWithFormat:@", %@", contentType] : @""];
     return [NSError errorWithDomain:VOTErrorDomain
-                               code:response.statusCode
-                           userInfo:@{NSLocalizedDescriptionKey: description}];
+                               code:status
+                           userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
 - (void)ensureSession:(void (^)(NSError * _Nullable))completion {
@@ -199,9 +205,16 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
             return;
         }
 
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            completion(nil, [self httpErrorWithResponse:response description:@"VOT translation request failed"]);
+            return;
+        }
+
         VOTTranslation *translation = data.length ? [VOTProto decodeTranslation:data] : nil;
         if (!translation || !translation.parseValid || !translation.statusPresent) {
-            completion(nil, [self httpErrorWithResponse:response description:@"Malformed VOT translation response"]);
+            NSString *description = [NSString stringWithFormat:@"Malformed VOT translation response (%lu bytes)",
+                                     (unsigned long)data.length];
+            completion(nil, [self httpErrorWithResponse:response description:description]);
             return;
         }
 
