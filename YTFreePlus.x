@@ -16,6 +16,53 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
     }
 }
 
+static UIViewController *YTFPTopViewController(void) {
+    UIWindow *window = nil;
+    for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
+        if (candidate.isKeyWindow) {
+            window = candidate;
+            break;
+        }
+    }
+    if (!window) window = UIApplication.sharedApplication.windows.firstObject;
+
+    UIViewController *controller = window.rootViewController;
+    while (controller) {
+        if (controller.presentedViewController) {
+            controller = controller.presentedViewController;
+            continue;
+        }
+        if ([controller isKindOfClass:UINavigationController.class]) {
+            controller = ((UINavigationController *)controller).visibleViewController;
+            continue;
+        }
+        if ([controller isKindOfClass:UITabBarController.class]) {
+            controller = ((UITabBarController *)controller).selectedViewController;
+            continue;
+        }
+        break;
+    }
+    return controller;
+}
+
+static void YTFPShowVOTError(NSString *message) {
+    if (message.length == 0) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *controller = YTFPTopViewController();
+        if (!controller) return;
+        if ([controller.presentedViewController isKindOfClass:UIAlertController.class]) return;
+
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Yandex VOT"
+                                                                       message:message
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [controller presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 %hook YTMainAppControlsOverlayView
 
 %property(nonatomic, strong) UIButton *ytfpVOTButton;
@@ -73,6 +120,7 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
         ![player respondsToSelector:@selector(contentVideoID)] ||
         ![player respondsToSelector:@selector(currentVideoTotalMediaTime)]) {
         [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
+        YTFPShowVOTError(@"YouTube player API is unavailable.");
         return;
     }
 
@@ -82,13 +130,16 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
     @try {
         videoID = [player contentVideoID];
         duration = [player currentVideoTotalMediaTime];
-    } @catch (__unused NSException *exception) {
+    } @catch (NSException *exception) {
         [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
+        YTFPShowVOTError([NSString stringWithFormat:@"Player exception: %@", exception.reason ?: @"unknown"]);
         return;
     }
 
     if (videoID.length == 0 || !isfinite(duration) || duration <= 0) {
         [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
+        YTFPShowVOTError([NSString stringWithFormat:@"Invalid video metadata (id=%@, duration=%.2f).",
+                          videoID ?: @"nil", duration]);
         return;
     }
 
@@ -99,6 +150,14 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
 %new
 - (void)ytfpVOTStateChanged:(NSNotification *)notification {
     [self ytfpRefreshVOTButton:notification];
+
+    if ([VOTManager shared].state == VOTManagerStateError && self.window) {
+        NSString *message = notification.userInfo[@"message"];
+        if (message.length > 0) {
+            NSLog(@"[YTFreePlus][VOT] %@", message);
+            YTFPShowVOTError(message);
+        }
+    }
 }
 
 %new
