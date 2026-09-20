@@ -6,6 +6,7 @@
 - (CGFloat)currentVideoMediaTime;
 - (CGFloat)currentVideoTotalMediaTime;
 - (id)activeVideoPlayerOverlay;
+- (id)activeVideo;
 @end
 
 @interface YTMainAppVideoPlayerOverlayViewController : UIViewController
