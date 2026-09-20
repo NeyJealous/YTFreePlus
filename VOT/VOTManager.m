@@ -3,6 +3,7 @@
 #import "VOTAudioPlayer.h"
 #import "VOTConfig.h"
 #import "VOTTranslation.h"
+#import "VOTPreferences.h"
 #import "../YTFreePlus.h"
 
 @interface VOTManager ()
@@ -34,7 +35,7 @@
     if (self) {
         _client = [VOTClient new];
         _audioPlayer = [VOTAudioPlayer new];
-        _audioPlayer.volume = 1.0f;
+        _audioPlayer.volume = VOTPreferencesTranslationVolume();
         _state = VOTManagerStateOff;
         _latestRate = 1.0f;
     }
@@ -118,8 +119,8 @@
     [self.client translateVideoURL:url
                           videoID:videoID
                          duration:duration
-                   sourceLanguage:VOTDefaultSourceLanguage
-                   targetLanguage:VOTDefaultTargetLanguage
+                   sourceLanguage:VOTPreferencesSourceLanguage()
+                   targetLanguage:VOTPreferencesTargetLanguage()
                          progress:^(VOTTranslation *translation) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self || ![self.videoID isEqualToString:videoID]) return;
@@ -151,6 +152,13 @@
             [self setStateAndNotify:VOTManagerStateActive extra:nil];
         }];
     }];
+}
+
+- (void)applyPreferences {
+    self.audioPlayer.volume = VOTPreferencesTranslationVolume();
+    if (!VOTPreferencesEnabled() && self.state != VOTManagerStateOff) {
+        [self stop];
+    }
 }
 
 - (void)stop {
