@@ -6,6 +6,100 @@
 #import "VOTPreferences.h"
 #import "../YTFreePlus.h"
 
+@interface YTFPAudioTrack : NSObject
+@property(nonatomic, copy, readonly) NSString *id_p;
+@property(nonatomic, assign, readonly) BOOL audioIsDefault;
+@end
+
+@interface YTFPMLFormat : NSObject
+@property(nonatomic, readonly, strong) YTFPAudioTrack *audioTrack;
+- (NSURL *)URL;
+- (BOOL)isAudio;
+- (NSInteger)bitrate;
+@end
+
+@interface YTFPStreamingData : NSObject
+- (NSArray<YTFPMLFormat *> *)adaptiveStreams;
+@end
+
+@interface YTFPVideo : NSObject
+- (YTFPStreamingData *)streamingData;
+@end
+
+@interface YTFPPlaybackData : NSObject
+- (YTFPVideo *)video;
+@end
+
+@interface YTFPSingleVideo : NSObject
+- (YTFPPlaybackData *)playbackData;
+@end
+
+@interface YTFPSingleVideoController : NSObject
+- (YTFPSingleVideo *)singleVideo;
+@end
+
+static NSString *YTFPNormalizedLanguage(NSString *value) {
+    if (value.length == 0) return nil;
+    NSString *base = [[value componentsSeparatedByString:@"."] firstObject];
+    base = [[base componentsSeparatedByString:@"-"] firstObject];
+    return base.lowercaseString;
+}
+
+static NSURL *YTFPAudioStreamURLForPlayer(id player, NSString *sourceLanguage) {
+    if (!player || ![player respondsToSelector:@selector(activeVideo)]) return nil;
+
+    @try {
+        YTFPSingleVideoController *activeVideo = [player activeVideo];
+        YTFPSingleVideo *singleVideo = [activeVideo singleVideo];
+        YTFPPlaybackData *playbackData = [singleVideo playbackData];
+        YTFPVideo *video = [playbackData video];
+        YTFPStreamingData *streamingData = [video streamingData];
+        NSArray<YTFPMLFormat *> *streams = [streamingData adaptiveStreams];
+        if (streams.count == 0) return nil;
+
+        NSString *requested = YTFPNormalizedLanguage(sourceLanguage);
+        BOOL wantsSpecificLanguage = requested.length > 0 && ![requested isEqualToString:@"auto"];
+
+        YTFPMLFormat *best = nil;
+        NSInteger bestTier = NSIntegerMax;
+        NSInteger bestBitrate = NSIntegerMax;
+
+        for (YTFPMLFormat *format in streams) {
+            if (![format respondsToSelector:@selector(isAudio)] || ![format isAudio]) continue;
+            NSURL *URL = [format respondsToSelector:@selector(URL)] ? [format URL] : nil;
+            if (!URL) continue;
+
+            YTFPAudioTrack *track = nil;
+            if ([format respondsToSelector:@selector(audioTrack)]) {
+                track = format.audioTrack;
+            }
+
+            NSString *trackLanguage = YTFPNormalizedLanguage(track.id_p);
+            BOOL languageMatch = wantsSpecificLanguage && [trackLanguage isEqualToString:requested];
+            BOOL isDefault = track.audioIsDefault;
+
+            NSInteger tier = 2;
+            if (languageMatch) tier = 0;
+            else if (!wantsSpecificLanguage && isDefault) tier = 0;
+            else if (isDefault) tier = 1;
+
+            NSInteger bitrate = [format respondsToSelector:@selector(bitrate)] ? [format bitrate] : 0;
+            if (bitrate <= 0) bitrate = NSIntegerMax - 1;
+
+            if (!best || tier < bestTier || (tier == bestTier && bitrate < bestBitrate)) {
+                best = format;
+                bestTier = tier;
+                bestBitrate = bitrate;
+            }
+        }
+
+        return [best respondsToSelector:@selector(URL)] ? [best URL] : nil;
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+
 @interface VOTManager ()
 @property(nonatomic, strong) VOTClient *client;
 @property(nonatomic, strong) VOTAudioPlayer *audioPlayer;
@@ -139,12 +233,15 @@
     [self setStateAndNotify:VOTManagerStatePending extra:nil];
 
     NSString *url = [NSString stringWithFormat:@"https://youtu.be/%@", videoID];
+    NSString *sourceLanguage = VOTPreferencesSourceLanguage();
+    NSURL *audioStreamURL = YTFPAudioStreamURLForPlayer(self.playerController, sourceLanguage);
     __weak typeof(self) weakSelf = self;
 
     [self.client translateVideoURL:url
                           videoID:videoID
                          duration:duration
-                   sourceLanguage:VOTPreferencesSourceLanguage()
+                    audioStreamURL:audioStreamURL
+                   sourceLanguage:sourceLanguage
                    targetLanguage:VOTPreferencesTargetLanguage()
                          progress:^(VOTTranslation *translation) {
         __strong typeof(weakSelf) self = weakSelf;
