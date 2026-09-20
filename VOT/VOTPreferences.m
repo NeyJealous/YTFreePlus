@@ -9,6 +9,7 @@ static NSString * const VOTDiagnosticsKey = @"YTFreePlus.VOT.Diagnostics";
 static NSString * const VOTSourceLanguageKey = @"YTFreePlus.VOT.SourceLanguage";
 static NSString * const VOTTargetLanguageKey = @"YTFreePlus.VOT.TargetLanguage";
 static NSString * const VOTTranslationVolumeKey = @"YTFreePlus.VOT.TranslationVolume";
+static NSString * const VOTOverlayEnabledKey = @"YTFreePlus.VOT.OverlayEnabled";
 
 static NSDictionary *VOTDefaultPreferences(void) {
     return @{
@@ -18,6 +19,7 @@ static NSDictionary *VOTDefaultPreferences(void) {
         VOTSourceLanguageKey: @"auto",
         VOTTargetLanguageKey: @"ru",
         VOTTranslationVolumeKey: @1.0f,
+        VOTOverlayEnabledKey: @YES,
     };
 }
 
@@ -26,6 +28,8 @@ static NSUserDefaults *VOTDefaults(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         [defaults registerDefaults:VOTDefaultPreferences()];
+        BOOL overlayEnabled = [defaults boolForKey:VOTEnabledKey] && [defaults boolForKey:VOTShowButtonKey];
+        [defaults setBool:overlayEnabled forKey:VOTOverlayEnabledKey];
     });
     return defaults;
 }
@@ -62,12 +66,16 @@ float VOTPreferencesTranslationVolume(void) {
 }
 
 void VOTPreferencesSetEnabled(BOOL enabled) {
-    [VOTDefaults() setBool:enabled forKey:VOTEnabledKey];
+    NSUserDefaults *defaults = VOTDefaults();
+    [defaults setBool:enabled forKey:VOTEnabledKey];
+    [defaults setBool:(enabled && [defaults boolForKey:VOTShowButtonKey]) forKey:VOTOverlayEnabledKey];
     VOTNotifyPreferenceChange();
 }
 
 void VOTPreferencesSetShowButton(BOOL showButton) {
-    [VOTDefaults() setBool:showButton forKey:VOTShowButtonKey];
+    NSUserDefaults *defaults = VOTDefaults();
+    [defaults setBool:showButton forKey:VOTShowButtonKey];
+    [defaults setBool:(showButton && [defaults boolForKey:VOTEnabledKey]) forKey:VOTOverlayEnabledKey];
     VOTNotifyPreferenceChange();
 }
 
@@ -100,5 +108,6 @@ void VOTPreferencesReset(void) {
         [defaults removeObjectForKey:key];
     }
     [defaults registerDefaults:VOTDefaultPreferences()];
+    [defaults setBool:YES forKey:VOTOverlayEnabledKey];
     VOTNotifyPreferenceChange();
 }
