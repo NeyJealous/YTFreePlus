@@ -59,10 +59,38 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
 
 %new
 - (void)ytfpToggleVOT {
-    YTPlayerViewController *player = self.playerViewController;
-    NSString *videoID = [player contentVideoID];
-    NSTimeInterval duration = [player currentVideoTotalMediaTime];
-    if (videoID.length == 0 || duration <= 0) return;
+    id player = nil;
+
+    @try {
+        if ([self respondsToSelector:@selector(playerViewController)]) {
+            player = self.playerViewController;
+        }
+    } @catch (__unused NSException *exception) {
+        player = nil;
+    }
+
+    if (!player ||
+        ![player respondsToSelector:@selector(contentVideoID)] ||
+        ![player respondsToSelector:@selector(currentVideoTotalMediaTime)]) {
+        [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
+        return;
+    }
+
+    NSString *videoID = nil;
+    NSTimeInterval duration = 0;
+
+    @try {
+        videoID = [player contentVideoID];
+        duration = [player currentVideoTotalMediaTime];
+    } @catch (__unused NSException *exception) {
+        [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
+        return;
+    }
+
+    if (videoID.length == 0 || !isfinite(duration) || duration <= 0) {
+        [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
+        return;
+    }
 
     [VOTManager shared].playerController = player;
     [[VOTManager shared] toggleForVideoID:videoID duration:duration];
