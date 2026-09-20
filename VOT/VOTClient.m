@@ -241,14 +241,63 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
         }
 
         if (translation.status == VOTTranslationStatusFailed) {
+            // Yandex can report an audio acquisition failure as FAILED +
+            // shouldRetry=1 instead of AUDIO_REQUESTED. Treat it as the same
+            // recovery path when a translation ID is available.
+            if (translation.shouldRetry > 0 &&
+                failureRetryAllowed &&
+                audioFallbackAllowed &&
+                translation.translationID.length > 0) {
+                [self handleAudioRequestedForURL:url
+                                         videoID:videoID
+                                   translationID:translation.translationID
+                                  audioStreamURL:audioStreamURL
+                                       operation:operation
+                                      completion:^(NSError *audioRecoveryError) {
+                    if (operation != self.operationID) return;
+
+                    if (audioRecoveryError) {
+                        NSString *baseMessage = translation.message.length
+                            ? translation.message
+                            : @"Yandex could not translate this video";
+                        NSString *message = [NSString stringWithFormat:
+                            @"%@\n(status=%ld, retry=%ld, id=%@)\naudio recovery: %@",
+                            baseMessage,
+                            (long)translation.status,
+                            (long)translation.shouldRetry,
+                            translation.translationID,
+                            audioRecoveryError.localizedDescription ?: @"unknown"];
+                        completion(nil, [NSError errorWithDomain:VOTErrorDomain
+                                                            code:translation.status
+                                                        userInfo:@{NSLocalizedDescriptionKey: message}]);
+                        return;
+                    }
+
+                    [self requestTranslationURL:url
+                                        videoID:videoID
+                                       duration:duration
+                                 audioStreamURL:audioStreamURL
+                                 sourceLanguage:sourceLanguage
+                                 targetLanguage:targetLanguage
+                                   firstRequest:YES
+                                    pollAttempt:pollAttempt + 1
+                           audioFallbackAllowed:NO
+                             failureRetryAllowed:NO
+                                      operation:operation
+                                       progress:progress
+                                     completion:completion];
+                }];
+                return;
+            }
+
             if (translation.shouldRetry > 0 && failureRetryAllowed) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
                                dispatch_get_main_queue(), ^{
                     if (operation != self.operationID) return;
                     [self requestTranslationURL:url
                                         videoID:videoID
                                        duration:duration
-                              audioStreamURL:audioStreamURL
+                                 audioStreamURL:audioStreamURL
                                  sourceLanguage:sourceLanguage
                                  targetLanguage:targetLanguage
                                    firstRequest:YES
