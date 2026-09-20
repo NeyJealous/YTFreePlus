@@ -10,6 +10,7 @@ typedef void (^VOTCompletionBlock)(VOTTranslation * _Nullable translation, NSErr
 - (void)translateVideoURL:(NSString *)url
                  videoID:(NSString *)videoID
                 duration:(NSTimeInterval)duration
+           audioStreamURL:(nullable NSURL *)audioStreamURL
           sourceLanguage:(NSString *)sourceLanguage
           targetLanguage:(NSString *)targetLanguage
                 progress:(nullable VOTProgressBlock)progress
