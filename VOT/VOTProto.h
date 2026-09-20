@@ -16,5 +16,11 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSData *)emptyAudioRequestWithURL:(NSString *)url
                        translationID:(NSString *)translationID
                               fileID:(NSString *)fileID;
++ (NSData *)partialAudioRequestWithURL:(NSString *)url
+                          translationID:(NSString *)translationID
+                                 fileID:(NSString *)fileID
+                                chunkID:(NSInteger)chunkID
+                           partsLength:(NSInteger)partsLength
+                                  data:(NSData *)audioData;
 @end
 NS_ASSUME_NONNULL_END
