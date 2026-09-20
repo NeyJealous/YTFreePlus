@@ -1,4 +1,5 @@
 #import "VOTPreferences.h"
+#import <math.h>
 
 NSNotificationName const VOTPreferencesDidChangeNotification = @"YTFreePlus.VOTPreferencesDidChange";
 
