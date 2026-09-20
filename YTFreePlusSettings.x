@@ -1,5 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <math.h>
+#import <float.h>
 #import "VOT/VOTPreferences.h"
 #import "VOT/VOTManager.h"
 
