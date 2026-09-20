@@ -1,6 +1,7 @@
 #import "YTFreePlus.h"
 #import "VOT/VOTManager.h"
 #import "VOT/VOTConfig.h"
+#import "VOT/VOTPreferences.h"
 
 static __weak YTPlayerViewController *YTFPActivePlayerController = nil;
 
@@ -184,6 +185,10 @@ static void YTFPShowVOTError(NSString *message) {
                                                  selector:@selector(ytfpVOTStateChanged:)
                                                      name:VOTStateChangedNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ytfpVOTPreferencesChanged:)
+                                                     name:VOTPreferencesDidChangeNotification
+                                                   object:nil];
         self.ytfpVOTObserving = YES;
     }
 
@@ -192,6 +197,11 @@ static void YTFPShowVOTError(NSString *message) {
 
 %new
 - (void)ytfpToggleVOT {
+    if (!VOTPreferencesEnabled()) {
+        [self ytfpRefreshVOTButton:nil];
+        return;
+    }
+
     id player = YTFPResolvePlayerController(self);
 
     if (!player ||
@@ -201,7 +211,7 @@ static void YTFPShowVOTError(NSString *message) {
         NSString *detail = player
             ? [NSString stringWithFormat:@"Found %@, but required player methods are unavailable.", NSStringFromClass([player class])]
             : @"YTPlayerViewController was not found in the active view hierarchy.";
-        YTFPShowVOTError(detail);
+        if (VOTPreferencesDiagnosticsEnabled()) YTFPShowVOTError(detail);
         return;
     }
 
@@ -213,14 +223,16 @@ static void YTFPShowVOTError(NSString *message) {
         duration = [player currentVideoTotalMediaTime];
     } @catch (NSException *exception) {
         [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
-        YTFPShowVOTError([NSString stringWithFormat:@"Player exception: %@", exception.reason ?: @"unknown"]);
+        if (VOTPreferencesDiagnosticsEnabled()) YTFPShowVOTError([NSString stringWithFormat:@"Player exception: %@", exception.reason ?: @"unknown"]);
         return;
     }
 
     if (videoID.length == 0 || !isfinite(duration) || duration <= 0) {
         [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
-        YTFPShowVOTError([NSString stringWithFormat:@"Invalid video metadata (id=%@, duration=%.2f).",
-                          videoID ?: @"nil", duration]);
+        if (VOTPreferencesDiagnosticsEnabled()) {
+            YTFPShowVOTError([NSString stringWithFormat:@"Invalid video metadata (id=%@, duration=%.2f).",
+                              videoID ?: @"nil", duration]);
+        }
         return;
     }
 
@@ -236,22 +248,32 @@ static void YTFPShowVOTError(NSString *message) {
         NSString *message = notification.userInfo[@"message"];
         if (message.length > 0) {
             NSLog(@"[YTFreePlus][VOT] %@", message);
-            YTFPShowVOTError(message);
+            if (VOTPreferencesDiagnosticsEnabled()) YTFPShowVOTError(message);
         }
     }
 }
 
 %new
 - (void)ytfpRefreshVOTButton:(NSNotification *)notification {
+    self.ytfpVOTButton.hidden = !(VOTPreferencesEnabled() && VOTPreferencesShowButton());
     NSInteger remaining = [notification.userInfo[@"remainingTime"] integerValue];
     NSString *title = VOTButtonTitleForState([VOTManager shared].state, remaining);
     [self.ytfpVOTButton setTitle:title forState:UIControlStateNormal];
+}
+
+%new
+- (void)ytfpVOTPreferencesChanged:(NSNotification *)notification {
+    [[VOTManager shared] applyPreferences];
+    [self ytfpRefreshVOTButton:nil];
 }
 
 - (void)dealloc {
     if (self.ytfpVOTObserving) {
         [[NSNotificationCenter defaultCenter] removeObserver:self
                                                         name:VOTStateChangedNotification
+                                                      object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:VOTPreferencesDidChangeNotification
                                                       object:nil];
     }
     %orig;
