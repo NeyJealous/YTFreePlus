@@ -6,6 +6,7 @@
 #import "VOTTranslation.h"
 
 static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
+static const NSUInteger VOTAudioChunkSize = 5295308;
 
 @interface VOTClient ()
 @property(nonatomic, strong) NSURLSession *urlSession;
@@ -138,6 +139,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
 - (void)translateVideoURL:(NSString *)url
                  videoID:(NSString *)videoID
                 duration:(NSTimeInterval)duration
+           audioStreamURL:(NSURL *)audioStreamURL
           sourceLanguage:(NSString *)sourceLanguage
           targetLanguage:(NSString *)targetLanguage
                 progress:(VOTProgressBlock)progress
@@ -156,6 +158,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
         [self requestTranslationURL:url
                             videoID:videoID
                            duration:duration
+                    audioStreamURL:audioStreamURL
                      sourceLanguage:sourceLanguage
                      targetLanguage:targetLanguage
                        firstRequest:YES
@@ -171,6 +174,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
 - (void)requestTranslationURL:(NSString *)url
                       videoID:(NSString *)videoID
                      duration:(NSTimeInterval)duration
+                audioStreamURL:(NSURL *)audioStreamURL
                sourceLanguage:(NSString *)sourceLanguage
                targetLanguage:(NSString *)targetLanguage
                  firstRequest:(BOOL)firstRequest
@@ -242,9 +246,10 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                     [self requestTranslationURL:url
                                         videoID:videoID
                                        duration:duration
+                              audioStreamURL:audioStreamURL
                                  sourceLanguage:sourceLanguage
                                  targetLanguage:targetLanguage
-                                   firstRequest:NO
+                                   firstRequest:YES
                                     pollAttempt:pollAttempt + 1
                            audioFallbackAllowed:audioFallbackAllowed
                              failureRetryAllowed:NO
@@ -275,6 +280,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
             [self handleAudioRequestedForURL:url
                                      videoID:videoID
                                translationID:translation.translationID
+                              audioStreamURL:audioStreamURL
                                    operation:operation
                                   completion:^(NSError *fallbackError) {
                 if (operation != self.operationID) return;
@@ -286,9 +292,10 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                 [self requestTranslationURL:url
                                     videoID:videoID
                                    duration:duration
+                            audioStreamURL:audioStreamURL
                              sourceLanguage:sourceLanguage
                              targetLanguage:targetLanguage
-                               firstRequest:NO
+                               firstRequest:YES
                                 pollAttempt:pollAttempt + 1
                        audioFallbackAllowed:NO
                          failureRetryAllowed:failureRetryAllowed
@@ -307,6 +314,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                 [self requestTranslationURL:url
                                     videoID:videoID
                                    duration:duration
+                            audioStreamURL:audioStreamURL
                              sourceLanguage:sourceLanguage
                              targetLanguage:targetLanguage
                                firstRequest:NO
