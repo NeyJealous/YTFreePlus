@@ -58,16 +58,28 @@
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
 
-        YTPlayerViewController *player = self.playerController;
-        if (!player) return;
+        id player = self.playerController;
+        if (!player || ![player respondsToSelector:@selector(currentVideoMediaTime)]) return;
 
-        NSTimeInterval current = [player currentVideoMediaTime];
+        NSTimeInterval current = 0;
         float rate = 1.0f;
-        id overlay = [player activeVideoPlayerOverlay];
-        if ([overlay respondsToSelector:@selector(currentPlaybackRate)]) {
-            rate = [(YTMainAppVideoPlayerOverlayViewController *)overlay currentPlaybackRate];
-            if (rate <= 0.01f) rate = 1.0f;
+        id overlay = nil;
+
+        @try {
+            current = [player currentVideoMediaTime];
+            if ([player respondsToSelector:@selector(activeVideoPlayerOverlay)]) {
+                overlay = [player activeVideoPlayerOverlay];
+            }
+            if ([overlay respondsToSelector:@selector(currentPlaybackRate)]) {
+                rate = [(YTMainAppVideoPlayerOverlayViewController *)overlay currentPlaybackRate];
+                if (rate <= 0.01f) rate = 1.0f;
+            }
+        } @catch (__unused NSException *exception) {
+            [self stop];
+            return;
         }
+
+        if (!isfinite(current) || current < 0) return;
 
         if (self.lastObservedTime >= 0 && fabs(current - self.lastObservedTime) > 0.03) {
             self.youtubePlaying = YES;
