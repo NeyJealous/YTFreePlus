@@ -2,6 +2,7 @@
 
 @interface YTPlayerViewController : UIViewController
 - (NSString *)contentVideoID;
+- (NSString *)currentVideoID;
 - (CGFloat)currentVideoMediaTime;
 - (CGFloat)currentVideoTotalMediaTime;
 - (id)activeVideoPlayerOverlay;
