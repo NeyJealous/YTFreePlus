@@ -18,4 +18,5 @@
 - (void)ytfpToggleVOT;
 - (void)ytfpVOTStateChanged:(NSNotification *)notification;
 - (void)ytfpRefreshVOTButton:(NSNotification *)notification;
+- (void)ytfpVOTPreferencesChanged:(NSNotification *)notification;
 @end
