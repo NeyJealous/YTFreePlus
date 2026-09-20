@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, weak, nullable) YTPlayerViewController *playerController;
 + (instancetype)shared;
 - (void)toggleForVideoID:(NSString *)videoID duration:(NSTimeInterval)duration;
+- (void)applyPreferences;
 - (void)stop;
 @end
 NS_ASSUME_NONNULL_END
