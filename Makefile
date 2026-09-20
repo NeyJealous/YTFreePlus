@@ -11,7 +11,9 @@ before-all::
 
 TWEAK_NAME = YTFreePlus
 YTFreePlus_FILES = YTFreePlus.x \
+	YTFreePlusSettings.x \
 	VOT/VOTConfig.m \
+	VOT/VOTPreferences.m \
 	VOT/VOTSigner.m \
 	VOT/VOTProto.m \
 	VOT/VOTSession.m \
