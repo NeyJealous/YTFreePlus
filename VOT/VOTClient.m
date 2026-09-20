@@ -56,8 +56,10 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
     NSString *token = [NSString stringWithFormat:@"%@:%@:%@", session.uuid, path, VOTComponentVersion];
     NSData *tokenData = [token dataUsingEncoding:NSUTF8StringEncoding];
     NSString *tokenSign = [VOTSigner signatureForData:tokenData];
+    NSString *bodySign = [VOTSigner signatureForData:body];
+    if (tokenSign.length == 0 || bodySign.length == 0) return @{};
     return @{
-        @"Vtrans-Signature": [VOTSigner signatureForData:body],
+        @"Vtrans-Signature": bodySign,
         @"Sec-Vtrans-Sk": session.secretKey,
         @"Sec-Vtrans-Token": [NSString stringWithFormat:@"%@:%@", tokenSign, token]
     };
@@ -87,7 +89,14 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
     NSString *uuid = [VOTSigner randomToken];
     NSData *body = [VOTProto sessionRequestWithUUID:uuid module:@"video-translation"];
     NSMutableURLRequest *request = [self requestForPath:@"/session/create" method:@"POST" body:body json:NO];
-    [request setValue:[VOTSigner signatureForData:body] forHTTPHeaderField:@"Vtrans-Signature"];
+    NSString *signature = [VOTSigner signatureForData:body];
+    if (signature.length == 0) {
+        completion([NSError errorWithDomain:VOTErrorDomain
+                                       code:-10
+                                   userInfo:@{NSLocalizedDescriptionKey: @"VOT signing is unavailable on this device"}]);
+        return;
+    }
+    [request setValue:signature forHTTPHeaderField:@"Vtrans-Signature"];
 
     [self performRequest:request completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
         if (error) {
