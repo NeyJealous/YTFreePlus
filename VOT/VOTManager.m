@@ -17,6 +17,7 @@
 @property(nonatomic, assign) float latestRate;
 @property(nonatomic, assign) BOOL youtubePlaying;
 @property(nonatomic, assign) NSUInteger stillTicks;
+@property(nonatomic, assign) NSUInteger videoIdentityMissTicks;
 @end
 
 @implementation VOTManager
@@ -53,6 +54,7 @@
     [self.syncTimer invalidate];
     self.lastObservedTime = -1;
     self.stillTicks = 0;
+    self.videoIdentityMissTicks = 0;
 
     __weak typeof(self) weakSelf = self;
     self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:0.4 repeats:YES block:^(NSTimer *timer) {
@@ -65,8 +67,17 @@
         NSTimeInterval current = 0;
         float rate = 1.0f;
         id overlay = nil;
+        NSString *observedVideoID = nil;
 
         @try {
+            if ([player respondsToSelector:@selector(contentVideoID)]) {
+                observedVideoID = [player contentVideoID];
+            }
+            if (observedVideoID.length == 0 &&
+                [player respondsToSelector:@selector(currentVideoID)]) {
+                observedVideoID = [player currentVideoID];
+            }
+
             current = [player currentVideoMediaTime];
             if ([player respondsToSelector:@selector(activeVideoPlayerOverlay)]) {
                 overlay = [player activeVideoPlayerOverlay];
@@ -76,6 +87,20 @@
                 if (rate <= 0.01f) rate = 1.0f;
             }
         } @catch (__unused NSException *exception) {
+            [self stop];
+            return;
+        }
+
+        if (observedVideoID.length == 0) {
+            self.videoIdentityMissTicks += 1;
+            if (self.videoIdentityMissTicks >= 2) {
+                [self stop];
+            }
+            return;
+        }
+
+        self.videoIdentityMissTicks = 0;
+        if (self.videoID.length > 0 && ![observedVideoID isEqualToString:self.videoID]) {
             [self stop];
             return;
         }
@@ -168,6 +193,11 @@
     [self.audioPlayer stop];
     self.videoID = nil;
     self.youtubePlaying = NO;
+    self.latestTime = 0;
+    self.lastObservedTime = -1;
+    self.latestRate = 1.0f;
+    self.stillTicks = 0;
+    self.videoIdentityMissTicks = 0;
     [self setStateAndNotify:VOTManagerStateOff extra:nil];
 }
 
