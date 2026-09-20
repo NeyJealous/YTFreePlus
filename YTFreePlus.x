@@ -5,7 +5,7 @@
 #import <dlfcn.h>
 
 static NSString * const YTFPVOTOverlayKey = @"YTFreePlusVOT";
-static NSString * const YTFPVOTShowButtonDefaultsKey = @"YTFreePlus.VOT.ShowButton";
+static NSString * const YTFPVOTShowButtonDefaultsKey = @"YTFreePlus.VOT.OverlayEnabled";
 static BOOL YTFPUsingYTVideoOverlay = NO;
 static __weak YTPlayerViewController *YTFPActivePlayerController = nil;
 
@@ -410,5 +410,7 @@ static BOOL YTFPRegisterWithYTVideoOverlay(void) {
 %end
 
 %ctor {
+    (void)VOTPreferencesEnabled();
+    (void)VOTPreferencesShowButton();
     YTFPUsingYTVideoOverlay = YTFPRegisterWithYTVideoOverlay();
 }
