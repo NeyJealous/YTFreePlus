@@ -14,6 +14,10 @@ static __weak YTPlayerViewController *YTFPActivePlayerController = nil;
 @end
 
 @interface YTInlinePlayerBarContainerView : UIView
+- (void)ytfpToggleVOTFromOverlay:(id)sender;
+- (void)ytfpVOTStateChanged:(NSNotification *)notification;
+- (void)ytfpRefreshVOTButton:(NSNotification *)notification;
+- (void)ytfpVOTPreferencesChanged:(NSNotification *)notification;
 @end
 
 static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaining) {
