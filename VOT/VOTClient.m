@@ -12,6 +12,7 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
 @property(nonatomic, strong) NSURLSession *urlSession;
 @property(nonatomic, strong, nullable) VOTSession *session;
 @property(nonatomic, assign) NSUInteger operationID;
+@property(nonatomic, copy, nullable) NSString *lastNativeAudioError;
 @end
 
 @implementation VOTClient
@@ -145,6 +146,7 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
                 progress:(VOTProgressBlock)progress
               completion:(VOTCompletionBlock)completion {
     NSUInteger operation = ++self.operationID;
+    self.lastNativeAudioError = nil;
     __weak typeof(self) weakSelf = self;
 
     [self ensureSession:^(NSError *error) {
@@ -263,13 +265,17 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
             NSString *baseMessage = translation.message.length
                 ? translation.message
                 : @"Yandex could not translate this video";
-            NSString *message = [NSString stringWithFormat:@"%@\n(status=%ld, retry=%ld%@)",
+            NSString *nativeAudioInfo = self.lastNativeAudioError.length
+                ? [NSString stringWithFormat:@"\nnative audio: %@", self.lastNativeAudioError]
+                : @"";
+            NSString *message = [NSString stringWithFormat:@"%@\n(status=%ld, retry=%ld%@)%@",
                                  baseMessage,
                                  (long)translation.status,
                                  (long)translation.shouldRetry,
                                  translation.translationID.length
                                      ? [NSString stringWithFormat:@", id=%@", translation.translationID]
-                                     : @""];
+                                     : @"",
+                                 nativeAudioInfo];
             completion(nil, [NSError errorWithDomain:VOTErrorDomain
                                                 code:translation.status
                                             userInfo:@{NSLocalizedDescriptionKey: message}]);
@@ -729,11 +735,13 @@ static const NSUInteger VOTAudioChunkSize = 5295308;
         if (!self || operation != self.operationID) return;
 
         if (!nativeError) {
+            self.lastNativeAudioError = nil;
             completion(nil);
             return;
         }
 
-        NSLog(@"[YTFreePlus][VOT] Native audio upload failed: %@", nativeError.localizedDescription);
+        self.lastNativeAudioError = nativeError.localizedDescription ?: @"unknown native audio error";
+        NSLog(@"[YTFreePlus][VOT] Native audio upload failed: %@", self.lastNativeAudioError);
         [self handleEmptyAudioFallbackForURL:url
                                      videoID:videoID
                                translationID:translationID
