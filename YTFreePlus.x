@@ -2,8 +2,19 @@
 #import "VOT/VOTManager.h"
 #import "VOT/VOTConfig.h"
 #import "VOT/VOTPreferences.h"
+#import <dlfcn.h>
 
+static NSString * const YTFPVOTOverlayKey = @"YTFreePlusVOT";
+static NSString * const YTFPVOTShowButtonDefaultsKey = @"YTFreePlus.VOT.ShowButton";
+static BOOL YTFPUsingYTVideoOverlay = NO;
 static __weak YTPlayerViewController *YTFPActivePlayerController = nil;
+
+@interface YTSettingsSectionItemManager : NSObject
++ (void)registerTweak:(NSString *)tweakId metadata:(NSDictionary *)metadata;
+@end
+
+@interface YTInlinePlayerBarContainerView : UIView
+@end
 
 static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaining) {
     switch (state) {
@@ -19,17 +30,15 @@ static NSString *VOTButtonTitleForState(VOTManagerState state, NSInteger remaini
     }
 }
 
-static UIViewController *YTFPTopViewController(void) {
-    UIWindow *window = nil;
+static UIWindow *YTFPKeyWindow(void) {
     for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
-        if (candidate.isKeyWindow) {
-            window = candidate;
-            break;
-        }
+        if (candidate.isKeyWindow) return candidate;
     }
-    if (!window) window = UIApplication.sharedApplication.windows.firstObject;
+    return UIApplication.sharedApplication.windows.firstObject;
+}
 
-    UIViewController *controller = window.rootViewController;
+static UIViewController *YTFPTopViewController(void) {
+    UIViewController *controller = YTFPKeyWindow().rootViewController;
     while (controller) {
         if (controller.presentedViewController) {
             controller = controller.presentedViewController;
@@ -46,13 +55,6 @@ static UIViewController *YTFPTopViewController(void) {
         break;
     }
     return controller;
-}
-
-static UIWindow *YTFPKeyWindow(void) {
-    for (UIWindow *candidate in UIApplication.sharedApplication.windows) {
-        if (candidate.isKeyWindow) return candidate;
-    }
-    return UIApplication.sharedApplication.windows.firstObject;
 }
 
 static YTPlayerViewController *YTFPFindPlayerInResponderChain(UIResponder *responder) {
@@ -84,14 +86,14 @@ static YTPlayerViewController *YTFPFindPlayerInController(UIViewController *cont
     }
 
     if ([controller isKindOfClass:UINavigationController.class]) {
-        UINavigationController *navigation = (UINavigationController *)controller;
-        YTPlayerViewController *found = YTFPFindPlayerInController(navigation.visibleViewController);
+        YTPlayerViewController *found =
+            YTFPFindPlayerInController(((UINavigationController *)controller).visibleViewController);
         if (found) return found;
     }
 
     if ([controller isKindOfClass:UITabBarController.class]) {
-        UITabBarController *tabs = (UITabBarController *)controller;
-        YTPlayerViewController *found = YTFPFindPlayerInController(tabs.selectedViewController);
+        YTPlayerViewController *found =
+            YTFPFindPlayerInController(((UITabBarController *)controller).selectedViewController);
         if (found) return found;
     }
 
@@ -107,18 +109,14 @@ static YTPlayerViewController *YTFPResolvePlayerController(UIResponder *origin) 
     YTPlayerViewController *player = YTFPFindPlayerInResponderChain(origin);
     if (player) return player;
 
-    UIWindow *window = YTFPKeyWindow();
-    player = YTFPFindPlayerInController(window.rootViewController);
+    player = YTFPFindPlayerInController(YTFPKeyWindow().rootViewController);
     if (player) return player;
 
-    player = YTFPActivePlayerController;
-    if (player) return player;
-
-    return nil;
+    return YTFPActivePlayerController;
 }
 
 static void YTFPShowVOTError(NSString *message) {
-    if (message.length == 0) return;
+    if (message.length == 0 || !VOTPreferencesDiagnosticsEnabled()) return;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *controller = YTFPTopViewController();
@@ -135,6 +133,101 @@ static void YTFPShowVOTError(NSString *message) {
     });
 }
 
+static UIButton *YTFPOverlayButtonForHost(id host) {
+    if (!host || ![host respondsToSelector:NSSelectorFromString(@"overlayButtons")]) return nil;
+
+    @try {
+        NSDictionary *buttons = [host valueForKey:@"overlayButtons"];
+        id button = buttons[YTFPVOTOverlayKey];
+        return [button isKindOfClass:UIButton.class] ? button : nil;
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void YTFPRefreshOverlayButton(id host, NSNotification *notification) {
+    UIButton *button = YTFPOverlayButtonForHost(host);
+    if (!button) return;
+
+    NSInteger remaining = [notification.userInfo[@"remainingTime"] integerValue];
+    NSString *title = VOTButtonTitleForState([VOTManager shared].state, remaining);
+    [button setTitle:title forState:UIControlStateNormal];
+
+    BOOL visible = VOTPreferencesEnabled() && VOTPreferencesShowButton();
+    button.hidden = !visible;
+    if (visible && button.alpha <= 0.0 && [host window]) {
+        button.alpha = 1.0;
+    }
+
+    if ([host respondsToSelector:@selector(setNeedsLayout)]) {
+        [host setNeedsLayout];
+    }
+}
+
+static void YTFPToggleVOTFromOrigin(UIResponder *origin, UIButton *button) {
+    if (!VOTPreferencesEnabled()) {
+        return;
+    }
+
+    id player = YTFPResolvePlayerController(origin);
+
+    if (!player ||
+        ![player respondsToSelector:@selector(contentVideoID)] ||
+        ![player respondsToSelector:@selector(currentVideoTotalMediaTime)]) {
+        [button setTitle:@"VOT !" forState:UIControlStateNormal];
+        NSString *detail = player
+            ? [NSString stringWithFormat:@"Found %@, but required player methods are unavailable.",
+                                         NSStringFromClass([player class])]
+            : @"YTPlayerViewController was not found in the active view hierarchy.";
+        YTFPShowVOTError(detail);
+        return;
+    }
+
+    NSString *videoID = nil;
+    NSTimeInterval duration = 0;
+
+    @try {
+        videoID = [player contentVideoID];
+        duration = [player currentVideoTotalMediaTime];
+    } @catch (NSException *exception) {
+        [button setTitle:@"VOT !" forState:UIControlStateNormal];
+        YTFPShowVOTError([NSString stringWithFormat:@"Player exception: %@",
+                                                    exception.reason ?: @"unknown"]);
+        return;
+    }
+
+    if (videoID.length == 0 || !isfinite(duration) || duration <= 0) {
+        [button setTitle:@"VOT !" forState:UIControlStateNormal];
+        YTFPShowVOTError([NSString stringWithFormat:@"Invalid video metadata (id=%@, duration=%.2f).",
+                                                    videoID ?: @"nil", duration]);
+        return;
+    }
+
+    [VOTManager shared].playerController = player;
+    [[VOTManager shared] toggleForVideoID:videoID duration:duration];
+}
+
+static BOOL YTFPRegisterWithYTVideoOverlay(void) {
+    NSString *frameworkPath = [[NSBundle mainBundle].bundlePath
+        stringByAppendingPathComponent:@"Frameworks/YTVideoOverlay.dylib"];
+    dlopen(frameworkPath.UTF8String, RTLD_LAZY | RTLD_LOCAL);
+
+    Class managerClass = NSClassFromString(@"YTSettingsSectionItemManager");
+    SEL registerSelector = NSSelectorFromString(@"registerTweak:metadata:");
+    if (!managerClass || ![managerClass respondsToSelector:registerSelector]) {
+        return NO;
+    }
+
+    NSDictionary *metadata = @{
+        @"accessibilityLabel": @"Yandex voice-over translation",
+        @"toggle": YTFPVOTShowButtonDefaultsKey,
+        @"asText": @YES,
+        @"selector": @"ytfpToggleVOTFromOverlay:"
+    };
+
+    [managerClass registerTweak:YTFPVOTOverlayKey metadata:metadata];
+    return YES;
+}
 
 %hook YTPlayerViewController
 
@@ -159,7 +252,7 @@ static void YTFPShowVOTError(NSString *message) {
     %orig;
     if (!self.window) return;
 
-    if (!self.ytfpVOTButton) {
+    if (!YTFPUsingYTVideoOverlay && !self.ytfpVOTButton) {
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         button.translatesAutoresizingMaskIntoConstraints = NO;
         button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
@@ -197,47 +290,13 @@ static void YTFPShowVOTError(NSString *message) {
 
 %new
 - (void)ytfpToggleVOT {
-    if (!VOTPreferencesEnabled()) {
-        [self ytfpRefreshVOTButton:nil];
-        return;
-    }
+    YTFPToggleVOTFromOrigin(self, self.ytfpVOTButton);
+}
 
-    id player = YTFPResolvePlayerController(self);
-
-    if (!player ||
-        ![player respondsToSelector:@selector(contentVideoID)] ||
-        ![player respondsToSelector:@selector(currentVideoTotalMediaTime)]) {
-        [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
-        NSString *detail = player
-            ? [NSString stringWithFormat:@"Found %@, but required player methods are unavailable.", NSStringFromClass([player class])]
-            : @"YTPlayerViewController was not found in the active view hierarchy.";
-        if (VOTPreferencesDiagnosticsEnabled()) YTFPShowVOTError(detail);
-        return;
-    }
-
-    NSString *videoID = nil;
-    NSTimeInterval duration = 0;
-
-    @try {
-        videoID = [player contentVideoID];
-        duration = [player currentVideoTotalMediaTime];
-    } @catch (NSException *exception) {
-        [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
-        if (VOTPreferencesDiagnosticsEnabled()) YTFPShowVOTError([NSString stringWithFormat:@"Player exception: %@", exception.reason ?: @"unknown"]);
-        return;
-    }
-
-    if (videoID.length == 0 || !isfinite(duration) || duration <= 0) {
-        [self.ytfpVOTButton setTitle:@"VOT !" forState:UIControlStateNormal];
-        if (VOTPreferencesDiagnosticsEnabled()) {
-            YTFPShowVOTError([NSString stringWithFormat:@"Invalid video metadata (id=%@, duration=%.2f).",
-                              videoID ?: @"nil", duration]);
-        }
-        return;
-    }
-
-    [VOTManager shared].playerController = player;
-    [[VOTManager shared] toggleForVideoID:videoID duration:duration];
+%new
+- (void)ytfpToggleVOTFromOverlay:(id)sender {
+    UIButton *button = [sender isKindOfClass:UIButton.class] ? sender : YTFPOverlayButtonForHost(self);
+    YTFPToggleVOTFromOrigin(self, button);
 }
 
 %new
@@ -248,13 +307,18 @@ static void YTFPShowVOTError(NSString *message) {
         NSString *message = notification.userInfo[@"message"];
         if (message.length > 0) {
             NSLog(@"[YTFreePlus][VOT] %@", message);
-            if (VOTPreferencesDiagnosticsEnabled()) YTFPShowVOTError(message);
+            YTFPShowVOTError(message);
         }
     }
 }
 
 %new
 - (void)ytfpRefreshVOTButton:(NSNotification *)notification {
+    if (YTFPUsingYTVideoOverlay) {
+        YTFPRefreshOverlayButton(self, notification);
+        return;
+    }
+
     self.ytfpVOTButton.hidden = !(VOTPreferencesEnabled() && VOTPreferencesShowButton());
     NSInteger remaining = [notification.userInfo[@"remainingTime"] integerValue];
     NSString *title = VOTButtonTitleForState([VOTManager shared].state, remaining);
@@ -280,3 +344,67 @@ static void YTFPShowVOTError(NSString *message) {
 }
 
 %end
+
+%hook YTInlinePlayerBarContainerView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!YTFPUsingYTVideoOverlay) return;
+
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:VOTStateChangedNotification
+                                                  object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:VOTPreferencesDidChangeNotification
+                                                  object:nil];
+
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ytfpVOTStateChanged:)
+                                                     name:VOTStateChangedNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ytfpVOTPreferencesChanged:)
+                                                     name:VOTPreferencesDidChangeNotification
+                                                   object:nil];
+        [self ytfpRefreshVOTButton:nil];
+    }
+}
+
+%new
+- (void)ytfpToggleVOTFromOverlay:(id)sender {
+    UIButton *button = [sender isKindOfClass:UIButton.class] ? sender : YTFPOverlayButtonForHost(self);
+    YTFPToggleVOTFromOrigin(self, button);
+}
+
+%new
+- (void)ytfpVOTStateChanged:(NSNotification *)notification {
+    [self ytfpRefreshVOTButton:notification];
+}
+
+%new
+- (void)ytfpRefreshVOTButton:(NSNotification *)notification {
+    YTFPRefreshOverlayButton(self, notification);
+}
+
+%new
+- (void)ytfpVOTPreferencesChanged:(NSNotification *)notification {
+    [[VOTManager shared] applyPreferences];
+    [self ytfpRefreshVOTButton:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:VOTStateChangedNotification
+                                                  object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:VOTPreferencesDidChangeNotification
+                                                  object:nil];
+    %orig;
+}
+
+%end
+
+%ctor {
+    YTFPUsingYTVideoOverlay = YTFPRegisterWithYTVideoOverlay();
+}
