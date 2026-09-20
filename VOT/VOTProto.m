@@ -165,6 +165,31 @@ static NSDictionary<NSNumber *, id> *VOTParseFields(NSData *data, BOOL *valid) {
     return result;
 }
 
++ (NSData *)partialAudioRequestWithURL:(NSString *)url
+                          translationID:(NSString *)translationID
+                                 fileID:(NSString *)fileID
+                                chunkID:(NSInteger)chunkID
+                           partsLength:(NSInteger)partsLength
+                                  data:(NSData *)audioData {
+    NSMutableData *partialAudio = [NSMutableData data];
+    VOTWriteInt(partialAudio, 1, (uint64_t)MAX(0, chunkID));
+    VOTWriteBytes(partialAudio, 2, audioData ?: [NSData data]);
+
+    NSMutableData *chunkInfo = [NSMutableData data];
+    VOTWriteBytes(chunkInfo, 1, partialAudio);
+    if (partsLength > 0) {
+        VOTWriteInt(chunkInfo, 2, (uint64_t)partsLength);
+    }
+    VOTWriteString(chunkInfo, 3, fileID ?: @"");
+    VOTWriteInt(chunkInfo, 4, 1);
+
+    NSMutableData *data = [NSMutableData data];
+    VOTWriteString(data, 1, translationID ?: @"");
+    VOTWriteString(data, 2, url ?: @"");
+    VOTWriteBytes(data, 4, chunkInfo);
+    return data;
+}
+
 + (NSData *)emptyAudioRequestWithURL:(NSString *)url
                        translationID:(NSString *)translationID
                               fileID:(NSString *)fileID {
