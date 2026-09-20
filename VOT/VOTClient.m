@@ -161,6 +161,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                        firstRequest:YES
                         pollAttempt:0
                audioFallbackAllowed:YES
+                 failureRetryAllowed:YES
                           operation:operation
                            progress:progress
                          completion:completion];
@@ -175,6 +176,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                  firstRequest:(BOOL)firstRequest
                   pollAttempt:(NSInteger)pollAttempt
          audioFallbackAllowed:(BOOL)audioFallbackAllowed
+           failureRetryAllowed:(BOOL)failureRetryAllowed
                     operation:(NSUInteger)operation
                      progress:(VOTProgressBlock)progress
                    completion:(VOTCompletionBlock)completion {
@@ -233,9 +235,38 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
         }
 
         if (translation.status == VOTTranslationStatusFailed) {
-            NSString *message = translation.message.length ? translation.message : @"Yandex could not translate this video";
+            if (translation.shouldRetry > 0 && failureRetryAllowed) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    if (operation != self.operationID) return;
+                    [self requestTranslationURL:url
+                                        videoID:videoID
+                                       duration:duration
+                                 sourceLanguage:sourceLanguage
+                                 targetLanguage:targetLanguage
+                                   firstRequest:NO
+                                    pollAttempt:pollAttempt + 1
+                           audioFallbackAllowed:audioFallbackAllowed
+                             failureRetryAllowed:NO
+                                      operation:operation
+                                       progress:progress
+                                     completion:completion];
+                });
+                return;
+            }
+
+            NSString *baseMessage = translation.message.length
+                ? translation.message
+                : @"Yandex could not translate this video";
+            NSString *message = [NSString stringWithFormat:@"%@\n(status=%ld, retry=%ld%@)",
+                                 baseMessage,
+                                 (long)translation.status,
+                                 (long)translation.shouldRetry,
+                                 translation.translationID.length
+                                     ? [NSString stringWithFormat:@", id=%@", translation.translationID]
+                                     : @""];
             completion(nil, [NSError errorWithDomain:VOTErrorDomain
-                                                code:0
+                                                code:translation.status
                                             userInfo:@{NSLocalizedDescriptionKey: message}]);
             return;
         }
@@ -260,6 +291,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                                firstRequest:NO
                                 pollAttempt:pollAttempt + 1
                        audioFallbackAllowed:NO
+                         failureRetryAllowed:failureRetryAllowed
                                   operation:operation
                                    progress:progress
                                  completion:completion];
@@ -280,6 +312,7 @@ static NSString * const VOTErrorDomain = @"YTFreePlus.VOT";
                                firstRequest:NO
                                 pollAttempt:pollAttempt + 1
                        audioFallbackAllowed:audioFallbackAllowed
+                         failureRetryAllowed:failureRetryAllowed
                                   operation:operation
                                    progress:progress
                                  completion:completion];
